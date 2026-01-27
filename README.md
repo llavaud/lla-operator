@@ -452,6 +452,144 @@ Un Informer est composé de plusieurs sous-composants :
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+## Tests unitaires avec envtest
+
+Les tests unitaires du controller utilisent **envtest**, un framework qui simule un environnement Kubernetes sans avoir besoin d'un vrai cluster.
+
+### Architecture de la simulation
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                     Environnement de test                       │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────┐ │
+│  │   etcd          │◄───│  kube-apiserver │◄───│  k8sClient  │ │
+│  │  (stockage)     │    │  (API REST)     │    │  (ton code) │ │
+│  └─────────────────┘    └─────────────────┘    └─────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Les binaires téléchargés
+
+Quand tu exécutes `make setup-envtest`, l'outil télécharge **3 binaires réels** de Kubernetes dans `bin/k8s/` :
+
+| Binaire | Rôle |
+|---------|------|
+| `etcd` | Base de données clé-valeur qui stocke l'état du cluster |
+| `kube-apiserver` | Serveur API REST de Kubernetes |
+| `kubectl` | Client CLI (pour debug) |
+
+Ces binaires sont les **vrais composants Kubernetes**, pas des mocks.
+
+### Ce qui est simulé vs ce qui ne l'est pas
+
+| Composant | Présent ? | Explication |
+|-----------|-----------|-------------|
+| etcd | **Oui (réel)** | Stocke les ressources créées |
+| kube-apiserver | **Oui (réel)** | Valide les CRDs, gère CRUD |
+| controller-manager | Non | Pas de contrôleurs built-in (Deployment, etc.) |
+| scheduler | Non | Pas de scheduling de Pods |
+| kubelet | Non | Pas de vrais Pods/conteneurs |
+| Nodes | Non | Pas de nœuds dans le cluster |
+
+### Comment ça démarre
+
+Dans `internal/controller/suite_test.go` :
+
+```go
+testEnv = &envtest.Environment{
+    // Charge tes CRDs depuis config/crd/bases
+    CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+    ErrorIfCRDPathMissing: true,
+}
+
+// Démarre etcd + kube-apiserver et retourne la config de connexion
+cfg, err = testEnv.Start()
+```
+
+**Ce que `testEnv.Start()` fait concrètement :**
+
+1. Démarre un processus `etcd` sur un port aléatoire
+2. Démarre un processus `kube-apiserver` connecté à cet etcd
+3. Applique automatiquement tes CRDs au cluster
+4. Retourne une `rest.Config` pour s'y connecter
+
+### Le client k8sClient
+
+```go
+k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
+```
+
+Ce client est un **vrai client Kubernetes** qui communique avec le vrai `kube-apiserver` via HTTP/REST :
+
+```go
+k8sClient.Create(ctx, resource)  // → POST /apis/mygroup.example.com/v1alpha1/llas
+k8sClient.Get(ctx, name, obj)    // → GET /apis/mygroup.example.com/v1alpha1/llas/name
+k8sClient.Delete(ctx, resource)  // → DELETE /apis/mygroup.example.com/v1alpha1/llas/name
+```
+
+### Structure des tests avec Ginkgo
+
+Les tests utilisent le framework **Ginkgo/Gomega** (BDD) :
+
+```text
+┌─────────────────────────────────────────────────────────────────────┐
+│  suite_test.go                                                       │
+│  ─────────────                                                       │
+│  BeforeSuite() → Démarre etcd + kube-apiserver + crée k8sClient     │
+│  AfterSuite()  → Arrête l'environnement de test                     │
+└─────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  lla_controller_test.go                                              │
+│  ──────────────────────                                              │
+│                                                                      │
+│  Describe("Lla Controller", func() {                                 │
+│      Context("When reconciling a resource", func() {                 │
+│          BeforeEach() → Crée une ressource Lla de test               │
+│          AfterEach()  → Supprime la ressource Lla                    │
+│          It("should successfully reconcile", func() {                │
+│              // Appelle Reconcile() et vérifie le résultat           │
+│          })                                                          │
+│      })                                                              │
+│  })                                                                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Flux d'exécution d'un test
+
+```text
+1. BeforeSuite     → Démarre l'API server Kubernetes simulé
+2. BeforeEach      → Crée une ressource Lla de test
+3. It(...)         → Appelle Reconcile() et vérifie le résultat
+4. AfterEach       → Supprime la ressource Lla
+5. AfterSuite      → Arrête l'environnement de test
+```
+
+### Lancer les tests
+
+```bash
+make test
+# ou directement
+go test ./internal/controller/... -v
+```
+
+### Avantages d'envtest
+
+| Avantage | Explication |
+|----------|-------------|
+| Validation réelle | L'API server valide tes CRDs comme en production |
+| Pas de cluster requis | Pas besoin de Kind/Minikube/cluster distant |
+| Rapide | Démarre en ~2-3 secondes |
+| Isolé | Chaque suite de tests a son propre "cluster" |
+| Reproductible | Même comportement sur CI et en local |
+
+### Limitations
+
+- **Pas de Pods réels** : tu ne peux pas tester le scheduling ou l'exécution de conteneurs
+- **Pas de contrôleurs built-in** : un Deployment ne créera pas de ReplicaSet
+- Pour ces cas, utilise les **tests e2e** avec un vrai cluster Kind → `test/e2e/`
+
 ## Description
 // TODO(user): An in-depth paragraph about your project and overview of use
 
