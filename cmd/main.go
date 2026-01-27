@@ -47,11 +47,18 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+/*
+LLA
+fonction appelée à l'initialisation du package main (une seule fois)
+*/
 func init() {
+	// LLA enregistre tous les types Kubernetes standards dans le scheme (Pod, Deployment, Service, etc.)
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
+	// LLA enregistre notre type personnalisé Lla dans le scheme (api/v1alpha1/lla_types.go)
 	utilruntime.Must(mygroupv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
+
+	// LLA utilruntime.Must est un wrapper qui panique si l'enregistrement dans le scheme échoue
 }
 
 // nolint:gocyclo
@@ -226,6 +233,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	/*
+	 LLA
+	 enregistrement du controller Lla auprès du manager
+	 appelle la méthode SetupWithManager de l'objet LlaReconciler
+	*/
 	if err := (&controller.LlaReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),

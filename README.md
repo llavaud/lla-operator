@@ -1,5 +1,142 @@
 # lla-operator
 
+## Structure du repository
+
+```text
+lla-operator/
+├── api/v1alpha1/          # Définition de la Custom Resource (CRD)
+├── cmd/                   # Point d'entrée de l'opérateur
+├── config/                # Manifests Kubernetes (Kustomize)
+├── internal/controller/   # Logique de réconciliation
+├── hack/                  # Utilitaires de dev
+├── test/                  # Tests e2e
+├── bin/                   # Binaires téléchargés
+├── Dockerfile             # Build de l'image
+├── Makefile               # Commandes de build
+├── PROJECT                # Métadonnées operator-sdk
+└── go.mod                 # Dépendances Go
+```
+
+## Les dossiers clés
+
+### `api/v1alpha1/` - Définition de la Custom Resource
+
+| Fichier | Rôle |
+|---------|------|
+| `lla_types.go` | Définit `LlaSpec` (état désiré) et `LlaStatus` (état observé) |
+| `groupversion_info.go` | Déclare le groupe API (`mygroup.example.com/v1alpha1`) |
+| `zz_generated.deepcopy.go` | Auto-généré pour la sérialisation |
+
+### `cmd/main.go` - Point d'entrée
+
+Initialise le **Manager** qui orchestre tout : client Kubernetes, cache, webhooks, métriques, et démarre le contrôleur.
+
+### `internal/controller/` - Logique métier
+
+| Fichier | Rôle |
+|---------|------|
+| `lla_controller.go` | Fonction `Reconcile()` appelée à chaque changement de ressource Lla |
+| `lla_controller_test.go` | Tests unitaires |
+
+### `config/` - Manifests Kubernetes
+
+| Sous-dossier | Contenu |
+|--------------|---------|
+| `crd/` | Manifest CRD généré automatiquement |
+| `rbac/` | ServiceAccount, Role, RoleBinding |
+| `manager/` | Deployment du contrôleur |
+| `default/` | Kustomization principale qui assemble tout |
+| `samples/` | Exemple de ressource Lla |
+
+> **Note :** En résumé : tu définis ta ressource dans api/, tu écris ta logique dans internal/controller/, et config/ contient tout ce qu'il faut pour déployer sur Kubernetes.
+
+## Workflow typique
+
+```text
+# 1. Modifier les champs de la CR
+#    → api/v1alpha1/lla_types.go
+
+# 2. Regénérer les manifests
+make generate && make manifests
+
+# 3. Implémenter la logique de réconciliation
+#    → internal/controller/lla_controller.go
+
+# 4. Tester et déployer
+make test
+make docker-build IMG=mon-registry/lla-operator:v1
+make deploy IMG=mon-registry/lla-operator:v1
+```
+
+## Multi-Controller
+
+On peut déclarer plusieurs controllers dans un même opérateur. C'est courant quand on gère plusieurs Custom Resources.
+
+### Créer une nouvelle API (CRD + Controller)
+
+```bash
+operator-sdk create api --group mygroup --version v1alpha1 --kind AnotherResource --resource --controller
+```
+
+Cela génère :
+
+- `api/v1alpha1/anotherresource_types.go` - la nouvelle CR
+- `internal/controller/anotherresource_controller.go` - le nouveau controller
+
+### Enregistrer les controllers dans main.go
+
+Dans `cmd/main.go`, chaque controller est enregistré séparément :
+
+```go
+// Controller 1
+if err = (&controller.LlaReconciler{
+    Client: mgr.GetClient(),
+    Scheme: mgr.GetScheme(),
+}).SetupWithManager(mgr); err != nil {
+    // ...
+}
+
+// Controller 2
+if err = (&controller.AnotherResourceReconciler{
+    Client: mgr.GetClient(),
+    Scheme: mgr.GetScheme(),
+}).SetupWithManager(mgr); err != nil {
+    // ...
+}
+```
+
+### Architecture
+
+```text
+┌─────────────────────────────────────────────────────┐
+│                     MANAGER                         │
+│                                                     │
+│  ┌─────────────────┐    ┌──────────────────┐        │
+│  │ LlaReconciler   │    │ AnotherReconciler│        │
+│  │ Watch: Lla      │    │ Watch: Another   │        │
+│  │ WorkQueue A     │    │ WorkQueue B      │        │
+│  └─────────────────┘    └──────────────────┘        │
+│           │                      │                  │
+│           └──────────┬───────────┘                  │
+│                      ▼                              │
+│              Client partagé                         │
+│              Cache partagé                          │
+│              Scheme commun                          │
+└─────────────────────────────────────────────────────┘
+```
+
+Chaque controller :
+
+- A sa propre **WorkQueue**
+- Watch ses propres ressources
+- A sa propre fonction `Reconcile()`
+
+Mais ils **partagent** :
+
+- Le même client Kubernetes
+- Le même cache (SharedInformerCache)
+- Le même Scheme
+
 ## Cycle de vie du Controller
 
 ### 1. Déploiement du Controller
@@ -187,6 +324,74 @@ kubectl apply -f ma-lla.yaml
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+## Serveurs HTTP du Manager
+
+Quand `mgr.Start()` est appelé, le Manager démarre automatiquement plusieurs serveurs HTTP :
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         SERVEURS HTTP DU MANAGER                            │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  HEALTH PROBES SERVER (:8081)                                       │    │
+│  │                                                                     │    │
+│  │  /healthz  → Liveness probe  (le pod est-il vivant ?)               │    │
+│  │  /readyz   → Readiness probe (le pod peut-il recevoir du trafic ?)  │    │
+│  │                                                                     │    │
+│  │  Utilisé par Kubernetes pour gérer le lifecycle du pod              │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  METRICS SERVER (:8443 HTTPS ou :8080 HTTP)                         │    │
+│  │                                                                     │    │
+│  │  /metrics  → Métriques Prometheus                                   │    │
+│  │                                                                     │    │
+│  │  Expose : reconcile_total, reconcile_errors, workqueue_depth, etc.  │    │
+│  │  Désactivé par défaut (metricsAddr = "0")                           │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  WEBHOOK SERVER (:9443 HTTPS)                                       │    │
+│  │                                                                     │    │
+│  │  Admission webhooks (si configurés) :                               │    │
+│  │  - Validating : rejette les ressources invalides                    │    │
+│  │  - Mutating   : modifie les ressources avant création               │    │
+│  │                                                                     │    │
+│  │  Nécessite des certificats TLS (cert-manager recommandé)            │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Configuration dans main.go
+
+```go
+// Health probes (toujours actif)
+HealthProbeBindAddress: ":8081",
+mgr.AddHealthzCheck("healthz", healthz.Ping)
+mgr.AddReadyzCheck("readyz", healthz.Ping)
+
+// Metrics server
+metricsServerOptions := metricsserver.Options{
+    BindAddress:   metricsAddr,      // "0" = désactivé, ":8443" = HTTPS, ":8080" = HTTP
+    SecureServing: secureMetrics,    // true = HTTPS avec auth
+}
+
+// Webhook server
+webhookServer := webhook.NewServer(webhook.Options{
+    TLSOpts: webhookTLSOpts,         // Configuration TLS
+})
+```
+
+### Résumé des endpoints
+
+| Port | Endpoint   | Protocol | Usage                              |
+|------|------------|----------|------------------------------------|
+| 8081 | `/healthz` | HTTP     | Liveness probe Kubernetes          |
+| 8081 | `/readyz`  | HTTP     | Readiness probe Kubernetes         |
+| 8443 | `/metrics` | HTTPS    | Métriques Prometheus (si activé)   |
+| 9443 | webhooks   | HTTPS    | Admission webhooks (si configurés) |
 
 ## Détail Informer
 
