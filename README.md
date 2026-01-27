@@ -1,5 +1,251 @@
 # lla-operator
-// TODO(user): Add simple overview of use/purpose
+
+## Cycle de vie du Controller
+
+### 1. Déploiement du Controller
+
+```bash
+kubectl apply -f config/manager/manager.yaml
+```
+
+```text
+┌─────────────────────────────────────────────────────┐
+│  Kubernetes crée un Pod avec le controller          │
+│  → Le binaire Go démarre (main.go)                  │
+└─────────────────────────────────────────────────────┘
+```
+
+### 2. Création du Manager
+
+```go
+// Dans main.go
+mgr, _ := ctrl.NewManager(cfg, ctrl.Options{...})
+```
+
+```text
+┌─────────────────────────────────────────────────────┐
+│  Manager créé avec :                                │
+│  - Un client REST vers l'API Server                 │
+│  - Un cache vide (SharedInformerFactory)            │
+│  - Le Scheme (types connus)                         │
+└─────────────────────────────────────────────────────┘
+```
+
+### 3. Enregistrement du Controller
+
+```go
+// Dans main.go
+(&controller.LlaReconciler{...}).SetupWithManager(mgr)
+```
+
+```text
+┌─────────────────────────────────────────────────────┐
+│  SetupWithManager() fait :                          │
+│                                                     │
+│  1. Crée un Controller avec sa WorkQueue            │
+│  2. Demande au Manager un Informer pour "Lla"       │
+│     → Le Manager note "il faudra un Informer Lla"   │
+│  3. Enregistre un EventHandler sur cet Informer     │
+│     (le lien Informer → WorkQueue)                  │
+│  4. Associe Reconcile() au Controller               │
+└─────────────────────────────────────────────────────┘
+```
+
+> **Note :** L'Informer n'est pas encore démarré à ce stade !
+
+### 4. Démarrage du Manager
+
+```go
+// Dans main.go
+mgr.Start(ctx)
+```
+
+C'est ici que tout démarre vraiment :
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│  mgr.Start() déclenche :                                        │
+│                                                                 │
+│  A) Démarrage des Informers                                     │
+│     ┌─────────────────────────────────────────────────────────┐ │
+│     │ Pour chaque type enregistré (Lla) :                     │ │
+│     │                                                         │ │
+│     │ 1. LIST initial sur l'API Server                        │ │
+│     │    GET /apis/mygroup.example.com/v1alpha1/lla           │ │
+│     │    → Remplit le cache avec toutes les Lla existantes    │ │
+│     │                                                         │ │
+│     │ 2. WATCH établi (connexion HTTP persistante)            │ │
+│     │    GET /apis/mygroup.example.com/v1alpha1/lla?watch=true│ │
+│     │    → Reçoit les events en streaming                     │ │
+│     └─────────────────────────────────────────────────────────┘ │
+│                                                                 │
+│  B) Démarrage des Workers du Controller                         │
+│     → Goroutines qui lisent la WorkQueue en boucle              │
+│                                                                 │
+│  C) Sync initial                                                │
+│     → Chaque objet du LIST génère un event ADDED                │
+│     → Tous passent dans la WorkQueue → Reconcile()              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 5. Arrivée d'un event (vie normale)
+
+Quelqu'un fait :
+
+```bash
+kubectl apply -f ma-lla.yaml
+```
+
+```text
+┌──────────────┐
+│  API Server  │ ──── Event ADDED {type: Lla, name: "ma-lla"} ────┐
+└──────────────┘                                                   │
+                                                                   ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  INFORMER (Lla)                                                     │
+│                                                                     │
+│  1. Reçoit l'event via le WATCH (connexion HTTP streaming)          │
+│  2. Met à jour son cache local (store)                              │
+│  3. Appelle les EventHandlers enregistrés                           │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  EVENT HANDLER (enregistré par SetupWithManager)                    │
+│                                                                     │
+│  func(obj) {                                                        │
+│      key := "default/ma-lla"    // namespace/name                   │
+│      queue.Add(key)             // pousse dans la WorkQueue         │
+│  }                                                                  │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  WORKQUEUE                                                          │
+│                                                                     │
+│  [ "default/ma-lla" ] ◄─── dédoublonnage + rate limiting            │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  WORKER (goroutine)                                                 │
+│                                                                     │
+│  for {                                                              │
+│      key := queue.Get()        // bloque jusqu'à avoir une clé      │
+│      Reconcile(ctx, Request{NamespacedName: key})                   │
+│      queue.Done(key)                                                │
+│  }                                                                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+## Résumé controller
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              TON OPERATOR                                   │
+│                                                                             │
+│  main.go:                                                                   │
+│  ────────                                                                   │
+│  1. cfg := ctrl.GetConfig()           // REST Config (auth + endpoint)      │
+│                                                                             │
+│  2. scheme := runtime.NewScheme()     // Registre vide                      │
+│     clientgoscheme.AddToScheme()      // + types standards                  │
+│     mygroupv1alpha1.AddToScheme()     // + ton type Lla                     │
+│                                                                             │
+│  3. mgr := ctrl.NewManager(cfg, Options{Scheme: scheme})                    │
+│     ┌─────────────────────────────────────────────────────────────────┐     │
+│     │ Manager créé avec :                                             │     │
+│     │ - REST client configuré                                         │     │
+│     │ - Scheme avec tous les types                                    │     │
+│     │ - SharedInformerCache (vide pour l'instant)                     │     │
+│     └─────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+│  4. (&LlaReconciler{}).SetupWithManager(mgr)                                │
+│     ┌─────────────────────────────────────────────────────────────────┐     │
+│     │ - Crée Controller avec WorkQueue                                │     │
+│     │ - Enregistre besoin d'un Informer Lla (pas encore créé)         │     │
+│     │ - Configure EventHandler (Informer → WorkQueue)                 │     │
+│     └─────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+│  5. mgr.Start(ctx)                                                          │
+│     ┌─────────────────────────────────────────────────────────────────┐     │
+│     │ A. Crée les Informers demandés                                  │     │
+│     │    - Informer Lla créé dans le SharedInformerCache              │     │
+│     │                                                                 │     │
+│     │ B. Démarre les Informers                                        │     │
+│     │    - LIST /apis/mygroup.example.com/v1alpha1/lla                │     │
+│     │    - Remplit le cache (Indexer)                                 │     │
+│     │    - WATCH établi (HTTP streaming)                              │     │
+│     │                                                                 │     │
+│     │ C. Attend que les caches soient synchronisés                    │     │
+│     │    (HasSynced = true quand LIST terminé)                        │     │
+│     │                                                                 │     │
+│     │ D. Démarre les workers des Controllers                          │     │
+│     │    - Goroutines qui lisent la WorkQueue                         │     │
+│     │    - Appellent Reconcile() pour chaque clé                      │     │
+│     └─────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Détail Informer
+
+Un Informer est composé de plusieurs sous-composants :
+
+```text
+┌─────────────────────────────────────────────────────────────────────┐
+│                         INFORMER (pour Lla)                         │
+│                                                                     │
+│  ┌────────────────────────────────────────────────────────────┐     │
+│  │                      REFLECTOR                             │     │
+│  │                                                            │     │
+│  │  - ListerWatcher : sait faire LIST et WATCH sur l'API      │     │
+│  │  - Connexion HTTP vers l'API Server                        │     │
+│  │  - Gère la reconnexion si le watch est coupé               │     │
+│  │  - Stocke le resourceVersion pour reprendre où on en était │     │
+│  │                                                            │     │
+│  └──────────────────────────┬─────────────────────────────────┘     │
+│                             │ objets                                │
+│                             ▼                                       │
+│  ┌────────────────────────────────────────────────────────────┐     │
+│  │                      DELTA FIFO                            │     │
+│  │                                                            │     │
+│  │  File d'attente interne qui stocke les deltas :            │     │
+│  │  - Added: {obj: Lla{name: "foo"}}                          │     │
+│  │  - Updated: {old: ..., new: ...}                           │     │
+│  │  - Deleted: {obj: Lla{name: "foo"}}                        │     │
+│  │                                                            │     │
+│  └──────────────────────────┬─────────────────────────────────┘     │
+│                             │ deltas                                │
+│                             ▼                                       │
+│  ┌────────────────────────────────────────────────────────────┐     │
+│  │                       INDEXER                              │     │
+│  │                                                            │     │
+│  │  Cache en mémoire avec index :                             │     │
+│  │                                                            │     │
+│  │  Store (map):                                              │     │
+│  │    "default/ma-lla" → *Lla{...}                            │     │
+│  │    "prod/autre-lla" → *Lla{...}                            │     │
+│  │                                                            │     │
+│  │  Index (optionnel):                                        │     │
+│  │    Par namespace: "default" → ["ma-lla"]                   │     │
+│  │    Par label: "app=foo" → ["ma-lla", "autre-lla"]          │     │
+│  │                                                            │     │
+│  └──────────────────────────┬─────────────────────────────────┘     │
+│                             │                                       │
+│                             ▼                                       │
+│  ┌────────────────────────────────────────────────────────────┐     │
+│  │                   EVENT HANDLERS                           │     │
+│  │                                                            │     │
+│  │  Liste de callbacks enregistrés :                          │     │
+│  │  - Controller A : OnAdd → queue.Add(key)                   │     │
+│  │  - Controller B : OnAdd → queue.Add(key)                   │     │
+│  │  - ...                                                     │     │
+│  │                                                            │     │
+│  └────────────────────────────────────────────────────────────┘     │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
 ## Description
 // TODO(user): An in-depth paragraph about your project and overview of use

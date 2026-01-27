@@ -178,6 +178,30 @@ func main() {
 		})
 	}
 
+	/*
+		LLA
+		Création du Manager (chef d'orchestre)
+		ctrl.GetConfigOrDie() récupère la config pour se connecter à l'API Server
+		┌─────────────────────────────────────────────────────────────────────┐
+		│                            MANAGER                                  │
+		│                                                                     │
+		│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐  │
+		│  │   REST Config   │  │     Scheme      │  │  Shared Informer    │  │
+		│  │   (connexion)   │  │   (types Go)    │  │      Cache          │  │
+		│  └─────────────────┘  └─────────────────┘  └─────────────────────┘  │
+		│                                                                     │
+		│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐  │
+		│  │ Client (cached) │  │   APIReader     │  │    Controllers[]    │  │
+		│  │  (lit le cache) │  │ (lit API direct)│  │  (les controllers)  │  │
+		│  └─────────────────┘  └─────────────────┘  └─────────────────────┘  │
+		│                                                                     │
+		│  ┌─────────────────┐  ┌─────────────────┐                           │
+		│  │  Health/Ready   │  │    Webhooks     │                           │
+		│  │   endpoints     │  │   (optionnel)   │                           │
+		│  └─────────────────┘  └─────────────────┘                           │
+		└─────────────────────────────────────────────────────────────────────┘
+
+	*/
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,

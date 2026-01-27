@@ -1,0 +1,54 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: llas.mygroup.example.com
+spec:
+  group: mygroup.example.com
+  names:
+    kind: Lla
+    listKind: LlaList
+    plural: llas
+    singular: lla
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Lla is the Schema for the lla API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: LlaSpec defines the desired state of Lla.
+            properties:
+              foo:
+                description: Foo is an example field of Lla. Edit lla_types.go to
+                  remove/update
+                type: string
+            type: object
+          status:
+            description: LlaStatus defines the observed state of Lla.
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

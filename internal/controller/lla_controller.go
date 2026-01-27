@@ -29,10 +29,21 @@ import (
 
 // LlaReconciler reconciles a Lla object
 type LlaReconciler struct {
+	// LLA client Kubernetes pour lire/écrire dans Kubernetes
 	client.Client
+	/*
+		LLA
+		le Scheme est un registre qui connait tous les types Go et leur correspondance avec les types Kubernetes
+		permet la conversion des objets Go <-> YAML/Json
+	*/
 	Scheme *runtime.Scheme
 }
 
+/*
+LLA
+annotation "magique" permettant de générer automatiquement
+le ClusterRole avec un "make manifests"
+*/
 // +kubebuilder:rbac:groups=mygroup.example.com,resources=lla,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=mygroup.example.com,resources=lla/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=mygroup.example.com,resources=lla/finalizers,verbs=update
@@ -46,18 +57,36 @@ type LlaReconciler struct {
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
+/*
+LLA
+Fonction de reconciliation
+ctx est le Context avec timeout et logger
+req contient le NamespacedName de l'objet à reconciler (req.NamespacedName.Name)
+*/
 func (r *LlaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = logf.FromContext(ctx)
 
 	// TODO(user): your logic here
 
+	/*
+		LLA
+		retour possible:
+		ctrl.Result{}, nil	Succès, terminé
+		ctrl.Result{Requeue: true}, nil	Requeue immédiat
+		ctrl.Result{RequeueAfter: 5*time.Minute}, nil	Requeue dans 5 min
+		ctrl.Result{}, err	Erreur → requeue avec backoff exponentiel
+	*/
 	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
+/*
+LLA
+Fonction pour configurer ce que le controller doit observer
+*/
 func (r *LlaReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&mygroupv1alpha1.Lla{}).
-		Named("lla").
-		Complete(r)
+		For(&mygroupv1alpha1.Lla{}). // LLA watch ma CR Lla
+		Named("lla").                // LLA nom du controller pour les logs/metrics
+		Complete(r)                  // LLA enregistre le reconciler
 }
