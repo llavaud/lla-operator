@@ -1,0 +1,9 @@
+apiVersion: mygroup.example.com/v1alpha1
+kind: Lla
+metadata:
+  labels:
+    app.kubernetes.io/name: lla-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: lla-sample
+spec:
+  # TODO(user): Add fields here

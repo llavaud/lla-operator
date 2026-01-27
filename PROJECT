@@ -10,4 +10,14 @@ plugins:
   scorecard.sdk.operatorframework.io/v2: {}
 projectName: lla-operator
 repo: github.com/llavaud/lla-operator
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: example.com
+  group: mygroup
+  kind: Lla
+  path: github.com/llavaud/lla-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"
