@@ -17,6 +17,52 @@ lla-operator/
 └── go.mod                 # Dépendances Go
 ```
 
+## Operator-sdk et Kubebuilder
+
+Ce projet est généré avec **operator-sdk**, qui est construit au-dessus de **kubebuilder**.
+
+### Hiérarchie des outils
+
+```text
+┌─────────────────────────────────────┐
+│          operator-sdk               │  ← Red Hat / OperatorFramework
+│  (fonctionnalités supplémentaires)  │
+├─────────────────────────────────────┤
+│           kubebuilder               │  ← Kubernetes SIG
+│    (scaffolding + controller-gen)   │
+├─────────────────────────────────────┤
+│       controller-runtime            │  ← Kubernetes SIG
+│   (bibliothèque Go pour contrôleurs)│
+└─────────────────────────────────────┘
+```
+
+### Kubebuilder
+
+Projet officiel Kubernetes (SIG API Machinery) qui fournit :
+
+- Le **scaffolding** de base (génération de la structure du projet)
+- **controller-gen** : génère CRDs, RBAC, webhooks depuis les markers Go
+- Les conventions et bonnes pratiques
+
+### Operator-sdk
+
+Projet Red Hat (OperatorFramework) qui **enveloppe kubebuilder** et ajoute :
+
+- Support pour Ansible et Helm (pas que Go)
+- Intégration OLM (Operator Lifecycle Manager)
+- Commandes `bundle`, `scorecard` pour la publication sur OperatorHub
+
+### Lequel choisir ?
+
+| Critère | Kubebuilder | Operator-sdk |
+|---------|-------------|--------------|
+| Go uniquement | Suffisant | Suffisant |
+| Ansible/Helm | Non | Oui |
+| Publier sur OperatorHub | Manuel | Intégré (OLM) |
+| Maintenance | Kubernetes SIG | Red Hat |
+
+En pratique, les commandes `kubebuilder init` et `operator-sdk init` génèrent quasiment le même code pour les projets Go.
+
 ## Les dossiers clés
 
 ### `api/v1alpha1/` - Définition de la Custom Resource
